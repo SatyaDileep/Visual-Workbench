@@ -3,6 +3,7 @@ import { useStore } from '../../stores/appStore';
 import { Send, Loader, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 
 const OPENCODE_URL = 'http://127.0.0.1:4096';
+const POLL_TIMEOUT = 120_000;
 
 const auth = (() => {
   const user = 'opencode';
@@ -28,13 +29,24 @@ interface OpenCodeMessage {
 }
 
 function extractHtml(text: string): string | null {
-  const match = text.match(/```html\n?([\s\S]*?)```/);
+  const match = text.match(/```html\s*([\s\S]*?)```/);
   return match ? match[1].trim() : null;
 }
 
 function extractSummary(text: string): string {
   const idx = text.indexOf('```html');
   return idx > 0 ? text.slice(0, idx).trim() : text;
+}
+
+function cleanResponse(text: string): string {
+  if (/cannot\s+read|does\s+not\s+support\s+image|tool\s+call/i.test(text)) {
+    return 'I encountered an issue with a file or tool. Try describing what you want to build without attaching images.';
+  }
+  return text;
+}
+
+function hasToolError(text: string): boolean {
+  return /cannot\s+read/i.test(text);
 }
 
 export function ChatPanel() {
@@ -45,6 +57,8 @@ export function ChatPanel() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const sessionIdRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
 
   const { activeScreenId, screens, messages, addMessage, updateMessage, updateScreen, clearMessages, theme } = useStore();
@@ -54,27 +68,41 @@ export function ChatPanel() {
     try {
       const res = await apiFetch('/session', { method: 'POST', body: JSON.stringify({}) });
       const data = await res.json();
-      if (data.id) {
+      if (data.id && mountedRef.current) {
         setSessionId(data.id);
+        sessionIdRef.current = data.id;
         setServerStatus('connected');
       }
     } catch {
-      setServerStatus('disconnected');
+      if (mountedRef.current) setServerStatus('disconnected');
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     initSession();
     const interval = setInterval(async () => {
       try {
         const res = await apiFetch('/session');
-        if (res.ok) setServerStatus('connected');
-        else setServerStatus('disconnected');
+        if (!mountedRef.current) return;
+        if (res.ok) {
+          setServerStatus('connected');
+          const sessions: unknown = await res.json();
+          const sid = sessionIdRef.current;
+          if (sid && Array.isArray(sessions) && !sessions.some((s: { id: string }) => s.id === sid)) {
+            initSession();
+          }
+        } else {
+          setServerStatus('disconnected');
+        }
       } catch {
-        setServerStatus('disconnected');
+        if (mountedRef.current) setServerStatus('disconnected');
       }
     }, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(interval);
+    };
   }, [initSession]);
 
   useEffect(() => {
@@ -89,38 +117,50 @@ export function ChatPanel() {
   }, [isLoading]);
 
   const pollForResponse = useCallback(async (sid: string, msgId: string, scId: string) => {
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        clearInterval(pollRef.current);
+        reject(new Error('timeout'));
+      }, POLL_TIMEOUT);
+
       pollRef.current = setInterval(async () => {
         try {
           const res = await apiFetch(`/session/${sid}/message`);
+          if (!mountedRef.current) return;
           const msgs: OpenCodeMessage[] = await res.json();
           const lastAssistant = [...msgs].reverse().find(m => m.info.role === 'assistant');
-          if (lastAssistant) {
-            const textParts = lastAssistant.parts.filter(p => p.type === 'text');
-            const reasoningParts = lastAssistant.parts.filter(p => p.type === 'reasoning');
-            const text = textParts.map(p => p.text).filter(Boolean).join('\n');
-            const thinking = reasoningParts.map(p => p.text).filter(Boolean).join('\n');
-            if (text) {
-              const html = extractHtml(text);
-              const summary = extractSummary(text);
-              updateMessage(scId, msgId, { content: summary || 'Slide generated', thinking });
-              if (html && scId === useStore.getState().activeScreenId) {
-                updateScreen(scId, { html });
-              }
-              resolve();
-              return;
+          if (!lastAssistant) return;
+
+          const textParts = lastAssistant.parts.filter(p => p.type === 'text');
+          const reasoningParts = lastAssistant.parts.filter(p => p.type === 'reasoning');
+          const text = textParts.map(p => p.text).filter(Boolean).join('\n');
+          const thinking = reasoningParts.map(p => p.text).filter(Boolean).join('\n');
+
+          if (text) {
+            const clean = cleanResponse(text);
+            const html = hasToolError(text) ? null : extractHtml(text);
+            const summary = hasToolError(text) ? clean : extractSummary(text);
+            updateMessage(scId, msgId, { content: summary || 'Slide generated', thinking });
+            if (html && scId === useStore.getState().activeScreenId) {
+              updateScreen(scId, { html });
             }
-            const stepFinish = lastAssistant.parts.some(p => p.type === 'step-finish');
-            if (stepFinish) {
-              const html = extractHtml(text);
-              const summary = extractSummary(text);
-              updateMessage(scId, msgId, { content: summary || 'Slide generated', thinking });
-              if (html && scId === useStore.getState().activeScreenId) {
-                updateScreen(scId, { html });
-              }
-              resolve();
-              return;
+            clearTimeout(timeout);
+            resolve();
+            return;
+          }
+
+          const stepFinish = lastAssistant.parts.some(p => p.type === 'step-finish');
+          if (stepFinish) {
+            const clean = cleanResponse(text);
+            const html = hasToolError(text) ? null : extractHtml(text);
+            const summary = hasToolError(text) ? clean : extractSummary(text);
+            updateMessage(scId, msgId, { content: summary || 'Slide generated', thinking });
+            if (html && scId === useStore.getState().activeScreenId) {
+              updateScreen(scId, { html });
             }
+            clearTimeout(timeout);
+            resolve();
+            return;
           }
         } catch {
           /* retry */
@@ -135,8 +175,26 @@ export function ChatPanel() {
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   };
 
+  const ensureSession = useCallback(async (): Promise<string> => {
+    try {
+      const res = await apiFetch('/session', { method: 'POST', body: JSON.stringify({}) });
+      const data = await res.json();
+      if (data.id) {
+        sessionIdRef.current = data.id;
+        setSessionId(data.id);
+        setServerStatus('connected');
+        return data.id;
+      }
+    } catch {
+      /* fall through */
+    }
+    const existing = sessionIdRef.current;
+    if (existing) return existing;
+    throw new Error('no session');
+  }, []);
+
   const handleSend = async () => {
-    if (!input.trim() || !activeScreenId || !sessionId) return;
+    if (!input.trim() || !activeScreenId || isLoading) return;
 
     const userContent = input.trim();
 
@@ -150,29 +208,41 @@ export function ChatPanel() {
     setIsLoading(true);
 
     try {
-      const res = await apiFetch(`/session/${sessionId}/prompt_async`, {
+      let sid = await ensureSession();
+      let res = await apiFetch(`/session/${sid}/prompt_async`, {
         method: 'POST',
         body: JSON.stringify({
-          model: { providerID: 'opencode', modelID: 'mimo-v2.5-free' },
-          system: 'You are an HTML slide designer. CRITICAL: You MUST NOT use any tools. You MUST NOT read any files. You MUST NOT explore or list the project directory. Just generate the HTML. First give a brief 1-2 sentence description of the slide, then provide the complete HTML code in a ```html code block. Ignore any file-reading tools you have access to.',
-          tools: [],
+          model: 'opencode/mimo-v2.5-free',
+          system: 'You are an HTML slide designer. Generate a complete HTML page with embedded CSS. First give a brief description, then the HTML in a ```html code block.',
           parts: [{ type: 'text', text: userContent }]
         })
       });
 
-      if (res.ok && assistantMsgId) {
-        await pollForResponse(sessionId, assistantMsgId, activeScreenId);
-      } else {
-        if (assistantMsgId) {
-          updateMessage(activeScreenId, assistantMsgId, {
-            content: 'Error: request failed'
-          });
-        }
+      if (!res.ok && assistantMsgId) {
+        sid = await ensureSession();
+        res = await apiFetch(`/session/${sid}/prompt_async`, {
+          method: 'POST',
+          body: JSON.stringify({
+            model: { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' },
+            system: 'You are an HTML slide designer. Generate a complete HTML page with embedded CSS. First give a brief description, then the HTML in a ```html code block.',
+            parts: [{ type: 'text', text: userContent }]
+          })
+        });
       }
-    } catch {
+
+      if (res.ok && assistantMsgId) {
+        await pollForResponse(sid, assistantMsgId, activeScreenId);
+      } else if (assistantMsgId) {
+        let errMsg = `Error ${res.status}`;
+        try { const err = await res.json(); errMsg += `: ${err?.error || err?.message || JSON.stringify(err)}`; } catch { errMsg += ': request failed'; }
+        updateMessage(activeScreenId, assistantMsgId, { content: errMsg });
+      }
+    } catch (err) {
       if (assistantMsgId) {
         updateMessage(activeScreenId, assistantMsgId, {
-          content: 'Error connecting to opencode. Check the server is running.'
+          content: err === 'timeout'
+            ? 'Error: request timed out. Try again.'
+            : 'Error connecting to opencode. Check the server is running.'
         });
       }
     } finally {

@@ -19,20 +19,21 @@ export function ViewerPanel() {
           )}
         </div>
 
-        <div className="viewer-container">
+        <div className="viewer-body">
           {activeScreen?.html ? (
-            <div className="viewer-frame">
-              <iframe
-                srcDoc={activeScreen.html}
-                title="Screen Preview"
-                sandbox="allow-scripts"
-              />
-            </div>
+            <iframe
+              srcDoc={activeScreen.html}
+              title="Screen Preview"
+              sandbox="allow-scripts"
+              className="viewer-iframe"
+            />
           ) : (
             <div className="viewer-empty">
-              <Maximize2 size={48} strokeWidth={1} />
-              <p>Your generated screen will appear here</p>
-              <p className="viewer-empty-sub">Chat with the AI to create your first screen</p>
+              <div className="viewer-empty-icon">
+                <Maximize2 size={32} strokeWidth={1.5} />
+              </div>
+              <p className="viewer-empty-title">Visual Thinking, Instant Slides</p>
+              <p className="viewer-empty-sub">Describe a concept and get a polished visual — no wrestling, just results</p>
             </div>
           )}
         </div>
@@ -52,6 +53,7 @@ export function ViewerPanel() {
                 srcDoc={activeScreen.html}
                 title="Screen Preview (Maximized)"
                 sandbox="allow-scripts"
+                className="viewer-iframe"
               />
             </div>
           </div>

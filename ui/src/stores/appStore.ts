@@ -30,6 +30,7 @@ interface AppState {
   removeScreen: (id: string) => void;
   setActiveScreen: (id: string) => void;
   updateScreen: (id: string, updates: Partial<Screen>) => void;
+  renameScreen: (id: string, name: string) => void;
   
   addMessage: (screenId: string, message: Omit<Message, 'id' | 'timestamp'>) => void;
   updateMessage: (screenId: string, messageId: string, updates: Partial<Message>) => void;
@@ -51,7 +52,7 @@ export const useStore = create<AppState>()(
 
       addScreen: (name) => {
         const current = get().screens;
-        if (current.length >= 10) return current[current.length - 1];
+        if (current.length >= 5) return current[current.length - 1];
         const id = crypto.randomUUID();
         const newScreen: Screen = {
           id,
@@ -89,6 +90,14 @@ export const useStore = create<AppState>()(
         set(state => ({
           screens: state.screens.map(s => 
             s.id === id ? { ...s, ...updates, updatedAt: Date.now() } : s
+          )
+        }));
+      },
+
+      renameScreen: (id, name) => {
+        set(state => ({
+          screens: state.screens.map(s =>
+            s.id === id ? { ...s, name: name.slice(0, 15), updatedAt: Date.now() } : s
           )
         }));
       },
