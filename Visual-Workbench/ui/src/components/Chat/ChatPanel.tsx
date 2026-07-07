@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useStore } from '../../stores/appStore';
-import { Send, Loader, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { Send, Loader, ChevronDown, ChevronRight, Trash2, Square } from 'lucide-react';
 
 const OPENCODE_URL = import.meta.env.VITE_OPENCODE_URL || 'http://127.0.0.1:4096';
 const POLL_TIMEOUT = 120_000;
@@ -54,14 +54,14 @@ export function ChatPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [serverStatus, setServerStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const sessionIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
+  const abortRef = useRef<AbortController | null>(null);
 
-  const { activeScreenId, screens, messages, addMessage, updateMessage, updateScreen, clearMessages, theme } = useStore();
+  const { activeScreenId, messages, addMessage, updateMessage, updateScreen, clearMessages, theme } = useStore();
   const screenMessages = messages[activeScreenId || ''] || [];
 
   const initSession = useCallback(async () => {
@@ -69,7 +69,6 @@ export function ChatPanel() {
       const res = await apiFetch('/session', { method: 'POST', body: JSON.stringify({}) });
       const data = await res.json();
       if (data.id && mountedRef.current) {
-        setSessionId(data.id);
         sessionIdRef.current = data.id;
         setServerStatus('connected');
       }
@@ -115,6 +114,10 @@ export function ChatPanel() {
     else setElapsed(0);
     return () => clearInterval(interval);
   }, [isLoading]);
+
+  useEffect(() => {
+    setInput('');
+  }, [activeScreenId]);
 
   const pollForResponse = useCallback(async (sid: string, msgId: string, scId: string) => {
     return new Promise<void>((resolve, reject) => {
@@ -181,7 +184,6 @@ export function ChatPanel() {
       const data = await res.json();
       if (data.id) {
         sessionIdRef.current = data.id;
-        setSessionId(data.id);
         setServerStatus('connected');
         return data.id;
       }
@@ -207,10 +209,14 @@ export function ChatPanel() {
     setInput('');
     setIsLoading(true);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       let sid = await ensureSession();
       let res = await apiFetch(`/session/${sid}/prompt_async`, {
         method: 'POST',
+        signal: controller.signal,
         body: JSON.stringify({
           model: 'opencode/mimo-v2.5-free',
           system: 'You are an HTML slide designer. Generate a complete HTML page with embedded CSS. First give a brief description, then the HTML in a ```html code block.',
@@ -222,6 +228,7 @@ export function ChatPanel() {
         sid = await ensureSession();
         res = await apiFetch(`/session/${sid}/prompt_async`, {
           method: 'POST',
+          signal: controller.signal,
           body: JSON.stringify({
             model: { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' },
             system: 'You are an HTML slide designer. Generate a complete HTML page with embedded CSS. First give a brief description, then the HTML in a ```html code block.',
@@ -246,9 +253,16 @@ export function ChatPanel() {
         });
       }
     } finally {
+      abortRef.current = null;
       clearInterval(pollRef.current);
       setIsLoading(false);
     }
+  };
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    clearInterval(pollRef.current);
+    setIsLoading(false);
   };
 
   return (
@@ -274,7 +288,7 @@ export function ChatPanel() {
           <div className="message-assistant message">
             <div className="message-content">
               {serverStatus === 'disconnected'
-                ? '⚠️ opencode server not connected. Run: opencode serve --cors http://localhost:5173'
+                ? 'opencode server not connected. Run: opencode serve --cors http://localhost:5173'
                 : 'Welcome! Describe the screen you want to create.'
               }
             </div>
@@ -290,12 +304,12 @@ export function ChatPanel() {
                   <div className="reasoning-block">
                     <button
                       className="reasoning-toggle"
-                      onClick={() => setExpandedReasoning(prev => ({ ...prev, [msg.id!]: !prev[msg.id!] }))}
+                      onClick={() => setExpandedReasoning(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
                     >
-                      {expandedReasoning[msg.id!] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {expandedReasoning[msg.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       <span>AI Thinking</span>
                     </button>
-                    {expandedReasoning[msg.id!] && (
+                    {expandedReasoning[msg.id] && (
                       <div className="reasoning-text">{msg.thinking}</div>
                     )}
                   </div>
@@ -326,9 +340,15 @@ export function ChatPanel() {
             placeholder={serverStatus === 'disconnected' ? 'Start opencode serve first...' : 'Describe the screen you want...'}
             rows={1}
           />
-          <button className="send-button" onClick={handleSend} disabled={isLoading || !input.trim() || serverStatus === 'disconnected'}>
-            <Send size={18} />
-          </button>
+          {isLoading ? (
+            <button className="send-button stop-button" onClick={handleStop} title="Stop generating">
+              <Square size={16} />
+            </button>
+          ) : (
+            <button className="send-button" onClick={handleSend} disabled={!input.trim() || serverStatus === 'disconnected'}>
+              <Send size={18} />
+            </button>
+          )}
         </div>
       </div>
     </div>

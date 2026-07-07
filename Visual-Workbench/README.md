@@ -19,9 +19,10 @@ No templates. No drag-and-drop. Just natural language to pixel-perfect slides.
 ## Features
 
 - **Chat-to-Slide** — Describe what you want, get a full HTML slide in real-time
+- **Stop Generation** — Cancel AI responses mid-stream with one click
 - **11 Premium Styles** — Minimalist, Glassmorphism, Brutalism, Cyberpunk, OLED Luxury, and more
 - **Live Preview** — See your slide render instantly in an iframe sandbox
-- **Multi-Screen** — Build entire presentations, not just single slides
+- **Multi-Screen** — Build entire presentations, not just single slides (isolated chat per screen)
 - **Image Support** — Paste screenshots directly into the chat for reference
 - **Theme Toggle** — Light and dark mode for the workbench itself
 - **PPT Export** — Convert your slides to PowerPoint with one click

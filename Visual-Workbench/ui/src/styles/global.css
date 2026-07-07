@@ -312,6 +312,18 @@ body {
 .send-button:hover { background: var(--accent-hover); transform: scale(1.05); }
 .send-button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+.stop-button {
+  background: #ef4444;
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
+
+.stop-button:hover { background: #dc2626; transform: scale(1.05); }
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
 /* Viewer */
 .viewer-pane {
   display: flex;
